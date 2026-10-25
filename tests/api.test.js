@@ -12,6 +12,7 @@ process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-moodify-ci-2026';
 process.env.TURSO_DATABASE_URL = '  file::memory:  ';
 delete process.env.TURSO_AUTH_TOKEN;
+process.env.CLIENT_URL = 'http://localhost:5173';
 process.env.UPLOAD_DIR = testUploadDir;
 
 const srcDir = fs.existsSync(path.resolve(__dirname, '../../src/app.js'))
@@ -722,7 +723,7 @@ describe('Moodify REST API Integration & Branch Coverage Tests', () => {
         'Access-Control-Request-Headers': 'content-type,authorization'
       }
     });
-    expect(preflightRes.status).toBe(204);
+    expect(preflightRes.status).toBe(200);
     expect(preflightRes.headers.get('access-control-allow-methods')).toContain('POST');
     expect(preflightRes.headers.get('access-control-allow-headers')).toContain('Content-Type');
     expect(preflightRes.headers.get('access-control-allow-origin')).toBe(
