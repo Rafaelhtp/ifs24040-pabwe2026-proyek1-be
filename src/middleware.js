@@ -184,6 +184,10 @@ function validate(req, res, next) {
   });
 }
 
+function asyncHandler(handler) {
+  return (req, res, next) => Promise.resolve(handler(req, res, next)).catch(next);
+}
+
 function errorHandler(err, req, res, _next) {
   if (req.file?.filename) {
     removeUploadedFile(req.file.filename);
@@ -213,6 +217,7 @@ function errorHandler(err, req, res, _next) {
 
 module.exports = {
   authMiddleware,
+  asyncHandler,
   uploadSingle,
   validate,
   errorHandler,

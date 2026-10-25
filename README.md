@@ -1,40 +1,48 @@
-# Moodify Backend API (Bun & `bun:sqlite`)
+# Moodify Backend API (Express & Turso/libSQL)
 
-**Moodify Backend** adalah layanan REST API mandiri untuk aplikasi jurnal mood harian **Moodify**. Layanan ini menggunakan **Express.js** dan modul SQLite bawaan **Bun (`bun:sqlite`)** tanpa ketergantungan *native C++ addon* (`better-sqlite3`), sehingga dapat berjalan langsung di atas container `oven/bun:alpine` maupun di lingkungan lokal lintas sistem operasi.
-
----
+**Moodify Backend** adalah layanan REST API untuk aplikasi jurnal mood harian **Moodify**. Backend menggunakan **Express.js** dan client promise-based **`@libsql/client`** untuk terhubung ke database Turso/libSQL.
 
 ## 1. Tech Stack
 
-- **Runtime & Package Manager**: **Bun** (bagian dari Bun Workspaces di root repo)
+- **Runtime**: Node.js 22+ atau Bun
 - **Framework Web**: Express.js
-- **Database**: SQLite (`bun:sqlite` dengan *prepared statements* & transaksi seed otomatis)
-- **Autentikasi & Keamanan**: JWT (`jsonwebtoken`) & `bcryptjs`
+- **Database**: Turso/libSQL melalui `@libsql/client` (query async/await dan seed transaksional)
+- **Autentikasi**: JWT (`jsonwebtoken`) dan `bcryptjs`
 - **Validasi & Upload**: `express-validator`, `multer` v2, `uuid`
-- **Testing**: `bun test` (`bun:test`) & Vitest (`lcov` coverage)
+- **Testing**: Vitest
 
----
+## 2. Konfigurasi database
 
-## 2. Cara Menjalankan dari Root Repositori
+Atur URL database Turso dan token autentikasi di file `.env`:
+
+```env
+TURSO_DATABASE_URL=libsql://your-database-name-your-org.turso.io
+TURSO_AUTH_TOKEN=your-turso-auth-token
+```
+
+Salin `.env.example` sebagai template. `TURSO_DATABASE_URL` wajib tersedia; backend akan berhenti saat inisialisasi jika belum diatur. Skema tabel dan data demo dibuat otomatis setelah koneksi berhasil.
+
+Untuk pengujian lokal tanpa Turso, API test menggunakan URL libSQL `file::memory:`.
+
+## 3. Menjalankan backend
 
 ```bash
-# 1. Instal seluruh dependensi workspace dari root repo
-bun install
-
-# 2. Salin konfigurasi environment
+# Salin konfigurasi environment
 copy .env.example .env   # Windows
 cp .env.example .env     # macOS / Linux
 
-# 3. Jalankan server backend (http://localhost:5000)
-bun run start
-
-# 4. Jalankan pengujian otomatis dengan coverage lcov
-bun test --coverage --coverage-reporter=lcov
+# Instal dependensi dan jalankan server
+npm install
+npm run start:node
 ```
 
----
+Server berjalan di `http://localhost:5000`. Tes bisa dijalankan dengan:
 
-## 3. Akun Demo
+```bash
+npm test
+```
+
+## 4. Akun Demo
 
 | Field | Nilai |
 | :--- | :--- |

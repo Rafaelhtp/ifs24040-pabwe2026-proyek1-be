@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const db = require('../db');
 const {
   authMiddleware,
+  asyncHandler,
   uploadSingle,
   validate,
   removeUploadedFile
@@ -12,9 +13,13 @@ const {
 const router = express.Router();
 
 const ENTRY_NOT_FOUND_MSG = 'Entri jurnal tidak ditemukan';
-const selectOwnedEntryRawStmt = db.prepare(
-  'SELECT * FROM entries WHERE id = ? AND user_id = ?'
-);
+async function selectOwnedEntryRaw(id, userId) {
+  const result = await db.execute({
+    sql: 'SELECT * FROM entries WHERE id = ? AND user_id = ?',
+    args: [id, userId]
+  });
+  return result.rows[0];
+}
 
 // Semua endpoint entries wajib autentikasi JWT
 router.use(authMiddleware);
@@ -39,8 +44,12 @@ const entryValidationRules = [
     .withMessage('mood_id wajib diisi')
     .isInt({ min: 1 })
     .withMessage('mood_id harus berupa angka bulat positif')
-    .custom((val) => {
-      const mood = db.prepare('SELECT id FROM moods WHERE id = ?').get(Number(val));
+    .custom(async (val) => {
+      const result = await db.execute({
+        sql: 'SELECT id FROM moods WHERE id = ?',
+        args: [Number(val)]
+      });
+      const mood = result.rows[0];
       if (!mood) {
         throw new Error('Mood tidak ditemukan di database');
       }
@@ -55,7 +64,7 @@ const entryValidationRules = [
 ];
 
 // Query helper untuk mengambil 1 entri lengkap dengan JOIN moods
-const selectEntryByIdStmt = db.prepare(`
+const SELECT_ENTRY_BY_ID = `
   SELECT
     e.id,
     e.user_id,
@@ -72,7 +81,15 @@ const selectEntryByIdStmt = db.prepare(`
   FROM entries e
   JOIN moods m ON e.mood_id = m.id
   WHERE e.id = ? AND e.user_id = ?
-`);
+`;
+
+async function selectEntryById(id, userId) {
+  const result = await db.execute({
+    sql: SELECT_ENTRY_BY_ID,
+    args: [id, userId]
+  });
+  return result.rows[0];
+}
 
 function buildEntryFilterQuery(userId, query) {
   const { mood_id, from, to, q } = query;
@@ -106,7 +123,7 @@ function buildEntryFilterQuery(userId, query) {
 }
 
 // GET /api/entries?mood_id=&from=&to=&q=&page=&limit=
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const userId = req.user?.id;
   const page = Math.max(1, Number.parseInt(req.query?.page, 10) || 1);
   const limit = Math.max(1, Math.min(100, Number.parseInt(req.query?.limit, 10) || 10));
@@ -114,13 +131,15 @@ router.get('/', (req, res) => {
 
   const { whereClause, params } = buildEntryFilterQuery(userId, req.query || {});
 
-  const countRow = db
-    .prepare(`SELECT COUNT(*) as total FROM entries e WHERE ${whereClause}`)
-    .get(...params);
+  const countResult = await db.execute({
+    sql: `SELECT COUNT(*) as total FROM entries e WHERE ${whereClause}`,
+    args: params
+  });
+  const countRow = countResult.rows[0];
   const total = countRow?.total || 0;
 
-  const rows = db
-    .prepare(`
+  const rowsResult = await db.execute({
+    sql: `
       SELECT
         e.id,
         e.user_id,
@@ -139,8 +158,10 @@ router.get('/', (req, res) => {
       WHERE ${whereClause}
       ORDER BY e.entry_date DESC, e.id DESC
       LIMIT ? OFFSET ?
-    `)
-    .all(...params, limit, offset);
+    `,
+    args: [...params, limit, offset]
+  });
+  const rows = rowsResult.rows;
 
   return res.status(200).json({
     success: true,
@@ -153,12 +174,12 @@ router.get('/', (req, res) => {
     },
     message: 'Daftar entri jurnal berhasil diambil'
   });
-});
+}));
 
 // GET /api/entries/:id
-router.get('/:id', (req, res) => {
+router.get('/:id', asyncHandler(async (req, res) => {
   const entryId = Number(req.params.id);
-  const entry = selectEntryByIdStmt.get(entryId, req.user?.id);
+  const entry = await selectEntryById(entryId, req.user?.id);
 
   if (!entry) {
     return res.status(404).json({
@@ -174,7 +195,7 @@ router.get('/:id', (req, res) => {
     data: entry,
     message: 'Detail entri jurnal berhasil diambil'
   });
-});
+}));
 
 // POST /api/entries (multipart/form-data, field gambar "image" opsional)
 router.post(
@@ -182,7 +203,7 @@ router.post(
   uploadSingle('image'),
   entryValidationRules,
   validate,
-  (req, res) => {
+  asyncHandler(async (req, res) => {
     const userId = req.user?.id;
     const entryDate = req.body.entry_date.trim();
     const moodId = Number(req.body.mood_id);
@@ -190,30 +211,31 @@ router.post(
     const note = req.body.note === undefined ? null : req.body.note;
     const imagePath = req.file?.filename || null;
 
-    const info = db
-      .prepare(`
+    const info = await db.execute({
+      sql: `
         INSERT INTO entries (user_id, entry_date, mood_id, energy_level, note, image_path)
         VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(userId, entryDate, moodId, energyLevel, note, imagePath);
+      `,
+      args: [userId, entryDate, moodId, energyLevel, note, imagePath]
+    });
 
-    const createdEntry = selectEntryByIdStmt.get(Number(info.lastInsertRowid), userId);
+    const createdEntry = await selectEntryById(Number(info.lastInsertRowid), userId);
 
     return res.status(201).json({
       success: true,
       data: createdEntry,
       message: 'Entri jurnal berhasil dibuat'
     });
-  }
+  })
 );
 
 // PUT /api/entries/:id (multipart/form-data, opsional ganti gambar)
 router.put(
   '/:id',
   uploadSingle('image'),
-  (req, res, next) => {
+  asyncHandler(async (req, res, next) => {
     const entryId = Number(req.params.id);
-    const existing = selectOwnedEntryRawStmt.get(entryId, req.user?.id);
+    const existing = await selectOwnedEntryRaw(entryId, req.user?.id);
 
     if (!existing) {
       if (req.file?.filename) {
@@ -229,10 +251,10 @@ router.put(
 
     req.existingEntry = existing;
     return next();
-  },
+  }),
   entryValidationRules,
   validate,
-  (req, res) => {
+  asyncHandler(async (req, res) => {
     const existing = req.existingEntry;
     const entryDate = req.body.entry_date.trim();
     const moodId = Number(req.body.mood_id);
@@ -247,26 +269,29 @@ router.put(
       imagePath = req.file.filename;
     }
 
-    db.prepare(`
-      UPDATE entries
-      SET entry_date = ?, mood_id = ?, energy_level = ?, note = ?, image_path = ?, updated_at = datetime('now')
-      WHERE id = ? AND user_id = ?
-    `).run(entryDate, moodId, energyLevel, note, imagePath, existing.id, req.user?.id);
+    await db.execute({
+      sql: `
+        UPDATE entries
+        SET entry_date = ?, mood_id = ?, energy_level = ?, note = ?, image_path = ?, updated_at = datetime('now')
+        WHERE id = ? AND user_id = ?
+      `,
+      args: [entryDate, moodId, energyLevel, note, imagePath, existing.id, req.user?.id]
+    });
 
-    const updatedEntry = selectEntryByIdStmt.get(existing.id, req.user?.id);
+    const updatedEntry = await selectEntryById(existing.id, req.user?.id);
 
     return res.status(200).json({
       success: true,
       data: updatedEntry,
       message: 'Entri jurnal berhasil diperbarui'
     });
-  }
+  })
 );
 
 // DELETE /api/entries/:id
-router.delete('/:id', (req, res) => {
+router.delete('/:id', asyncHandler(async (req, res) => {
   const entryId = Number(req.params.id);
-  const existing = selectOwnedEntryRawStmt.get(entryId, req.user?.id);
+  const existing = await selectOwnedEntryRaw(entryId, req.user?.id);
 
   if (!existing) {
     return res.status(404).json({
@@ -277,10 +302,10 @@ router.delete('/:id', (req, res) => {
     });
   }
 
-  db.prepare('DELETE FROM entries WHERE id = ? AND user_id = ?').run(
-    entryId,
-    req.user?.id
-  );
+  await db.execute({
+    sql: 'DELETE FROM entries WHERE id = ? AND user_id = ?',
+    args: [entryId, req.user?.id]
+  });
 
   if (existing.image_path) {
     removeUploadedFile(existing.image_path);
@@ -291,6 +316,6 @@ router.delete('/:id', (req, res) => {
     data: { id: entryId },
     message: 'Entri jurnal berhasil dihapus'
   });
-});
+}));
 
 module.exports = router;

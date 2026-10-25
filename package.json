@@ -2,7 +2,7 @@
   "name": "ifs24040-pabwe2026-proyek1-be",
   "version": "1.0.0",
   "private": true,
-  "description": "Backend REST API untuk aplikasi Moodify (Express + SQLite)",
+  "description": "Backend REST API untuk aplikasi Moodify (Express + Turso/libSQL)",
   "main": "src/server.js",
   "engines": {
     "node": ">=22.0.0"
@@ -14,6 +14,7 @@
     "test": "vitest run --coverage"
   },
   "dependencies": {
+    "@libsql/client": "^0.18.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "express": "^4.21.2",

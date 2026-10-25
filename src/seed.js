@@ -104,59 +104,64 @@ const DEMO_ENTRIES = [
   { daysAgo: 14, mood: 'Senang', energy: 5, note: 'Awal pekan yang produktif dan penuh energi positif.' }
 ];
 
-function seedDatabase(db) {
-  const moodCount = db.prepare('SELECT COUNT(*) as count FROM moods').get().count;
+async function seedDatabase(db) {
+  const countResult = await db.execute('SELECT COUNT(*) as count FROM moods');
+  const moodCount = countResult.rows[0].count;
   if (moodCount > 0) {
     return false;
   }
 
-  const runSeed = db.transaction(() => {
-    const insertMood = db.prepare(
-      'INSERT INTO moods (name, emoji, color) VALUES (?, ?, ?)'
-    );
+  const transaction = await db.transaction('write');
+  try {
     const moodIdMap = {};
 
     for (const m of DEFAULT_MOODS) {
-      const info = insertMood.run(m.name, m.emoji, m.color);
+      const info = await transaction.execute({
+        sql: 'INSERT INTO moods (name, emoji, color) VALUES (?, ?, ?)',
+        args: [m.name, m.emoji, m.color]
+      });
       moodIdMap[m.name] = Number(info.lastInsertRowid);
     }
-
-    const insertSong = db.prepare(
-      'INSERT INTO songs (title, artist, mood_id, link, cover_path, created_by) VALUES (?, ?, ?, ?, NULL, NULL)'
-    );
 
     for (const [moodName, songList] of Object.entries(SONGS_BY_MOOD)) {
       const moodId = moodIdMap[moodName];
       for (const s of songList) {
         const cleanTitle = s.title.trim();
-        insertSong.run(cleanTitle, s.artist, moodId, youtubeSearchLink(cleanTitle, s.artist));
+        await transaction.execute({
+          sql: 'INSERT INTO songs (title, artist, mood_id, link, cover_path, created_by) VALUES (?, ?, ?, ?, NULL, NULL)',
+          args: [cleanTitle, s.artist, moodId, youtubeSearchLink(cleanTitle, s.artist)]
+        });
       }
     }
 
     const demoEmail = process.env.DEMO_EMAIL || 'demo@moodify.com';
     const demoKey = process.env.DEMO_CREDENTIAL || ['demo', '12345'].join('');
     const demoHash = bcrypt.hashSync(demoKey, 10);
-    const userResult = db
-      .prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)')
-      .run('Pengguna Demo', demoEmail, demoHash);
+    const userResult = await transaction.execute({
+      sql: 'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
+      args: ['Pengguna Demo', demoEmail, demoHash]
+    });
     const demoUserId = Number(userResult.lastInsertRowid);
 
-    const insertEntry = db.prepare(
-      'INSERT INTO entries (user_id, entry_date, mood_id, energy_level, note, image_path) VALUES (?, ?, ?, ?, ?, NULL)'
-    );
-
     for (const e of DEMO_ENTRIES) {
-      insertEntry.run(
-        demoUserId,
-        formatRelativeDate(e.daysAgo),
-        moodIdMap[e.mood],
-        e.energy,
-        e.note
-      );
+      await transaction.execute({
+        sql: 'INSERT INTO entries (user_id, entry_date, mood_id, energy_level, note, image_path) VALUES (?, ?, ?, ?, ?, NULL)',
+        args: [
+          demoUserId,
+          formatRelativeDate(e.daysAgo),
+          moodIdMap[e.mood],
+          e.energy,
+          e.note
+        ]
+      });
     }
-  });
 
-  runSeed();
+    await transaction.commit();
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  }
+
   return true;
 }
 

@@ -4,15 +4,11 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body } = require('express-validator');
 const db = require('../db');
-const { authMiddleware, validate, getJwtSecret } = require('../middleware');
+const { authMiddleware, asyncHandler, validate, getJwtSecret } = require('../middleware');
 
 const router = express.Router();
 
 const INVALID_EMAIL_MSG = 'Format email tidak valid';
-const selectPublicUserByIdStmt = db.prepare(
-  'SELECT id, name, email, created_at FROM users WHERE id = ?'
-);
-
 function generateToken(user) {
   return jwt.sign(
     { id: user?.id, email: user?.email, name: user?.name },
@@ -32,12 +28,14 @@ router.post(
       .withMessage('Password minimal 8 karakter')
   ],
   validate,
-  (req, res) => {
+  asyncHandler(async (req, res) => {
     const { name, email, password } = req.body || {};
 
-    const existingUser = db
-      .prepare('SELECT id FROM users WHERE lower(email) = lower(?)')
-      .get(email);
+    const existingResult = await db.execute({
+      sql: 'SELECT id FROM users WHERE lower(email) = lower(?)',
+      args: [email]
+    });
+    const existingUser = existingResult.rows[0];
 
     if (existingUser) {
       return res.status(409).json({
@@ -49,11 +47,16 @@ router.post(
     }
 
     const passwordHash = bcrypt.hashSync(password, 10);
-    const info = db
-      .prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)')
-      .run(name.trim(), email.toLowerCase(), passwordHash);
+    const info = await db.execute({
+      sql: 'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
+      args: [name.trim(), email.toLowerCase(), passwordHash]
+    });
 
-    const user = selectPublicUserByIdStmt.get(Number(info.lastInsertRowid));
+    const userResult = await db.execute({
+      sql: 'SELECT id, name, email, created_at FROM users WHERE id = ?',
+      args: [Number(info.lastInsertRowid)]
+    });
+    const user = userResult.rows[0];
     const token = generateToken(user);
 
     return res.status(201).json({
@@ -61,7 +64,7 @@ router.post(
       data: { user, token },
       message: 'Registrasi pengguna berhasil'
     });
-  }
+  })
 );
 
 // POST /api/auth/login
@@ -72,12 +75,14 @@ router.post(
     body('password').notEmpty().withMessage('Password wajib diisi')
   ],
   validate,
-  (req, res) => {
+  asyncHandler(async (req, res) => {
     const { email, password } = req.body || {};
 
-    const userRow = db
-      .prepare('SELECT id, name, email, password_hash, created_at FROM users WHERE lower(email) = lower(?)')
-      .get(email.trim());
+    const userResult = await db.execute({
+      sql: 'SELECT id, name, email, password_hash, created_at FROM users WHERE lower(email) = lower(?)',
+      args: [email.trim()]
+    });
+    const userRow = userResult.rows[0];
 
     if (!userRow || !bcrypt.compareSync(password, userRow.password_hash)) {
       return res.status(401).json({
@@ -102,12 +107,16 @@ router.post(
       data: { user, token },
       message: 'Login berhasil'
     });
-  }
+  })
 );
 
 // GET /api/auth/me
-router.get('/me', authMiddleware, (req, res) => {
-  const user = selectPublicUserByIdStmt.get(req.user?.id);
+router.get('/me', authMiddleware, asyncHandler(async (req, res) => {
+  const result = await db.execute({
+    sql: 'SELECT id, name, email, created_at FROM users WHERE id = ?',
+    args: [req.user?.id]
+  });
+  const user = result.rows[0];
 
   if (!user) {
     return res.status(404).json({
@@ -123,6 +132,6 @@ router.get('/me', authMiddleware, (req, res) => {
     data: user,
     message: 'Profil pengguna berhasil diambil'
   });
-});
+}));
 
 module.exports = router;

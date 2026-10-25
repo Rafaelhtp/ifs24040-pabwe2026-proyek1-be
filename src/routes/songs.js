@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const db = require('../db');
 const {
   authMiddleware,
+  asyncHandler,
   uploadSingle,
   validate,
   removeUploadedFile
@@ -29,8 +30,21 @@ const BASE_SONG_SELECT = `
   JOIN moods m ON s.mood_id = m.id
 `;
 
-const selectSongByIdStmt = db.prepare(`${BASE_SONG_SELECT} WHERE s.id = ?`);
-const selectRawSongByIdStmt = db.prepare('SELECT * FROM songs WHERE id = ?');
+async function selectSongById(id) {
+  const result = await db.execute({
+    sql: `${BASE_SONG_SELECT} WHERE s.id = ?`,
+    args: [id]
+  });
+  return result.rows[0];
+}
+
+async function selectRawSongById(id) {
+  const result = await db.execute({
+    sql: 'SELECT * FROM songs WHERE id = ?',
+    args: [id]
+  });
+  return result.rows[0];
+}
 
 const songValidationRules = [
   body('title').trim().notEmpty().withMessage('Judul lagu wajib diisi'),
@@ -40,8 +54,12 @@ const songValidationRules = [
     .withMessage('mood_id wajib diisi')
     .isInt({ min: 1 })
     .withMessage('mood_id harus berupa angka bulat positif')
-    .custom((val) => {
-      const mood = db.prepare('SELECT id FROM moods WHERE id = ?').get(Number(val));
+    .custom(async (val) => {
+      const result = await db.execute({
+        sql: 'SELECT id FROM moods WHERE id = ?',
+        args: [Number(val)]
+      });
+      const mood = result.rows[0];
       if (!mood) {
         throw new Error('Mood tidak ditemukan di database');
       }
@@ -63,7 +81,7 @@ function resolveUpdatedLink(rawBodyLink, existingLink) {
 }
 
 // GET /api/songs (publik) filter ?mood_id=&q=
-router.get('/', (req, res) => {
+router.get('/', asyncHandler(async (req, res) => {
   const { mood_id, q } = req.query;
   const conditions = [];
   const params = [];
@@ -81,30 +99,33 @@ router.get('/', (req, res) => {
 
   const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-  const songs = db
-    .prepare(`${BASE_SONG_SELECT} ${whereClause} ORDER BY s.id DESC`)
-    .all(...params);
+  const result = await db.execute({
+    sql: `${BASE_SONG_SELECT} ${whereClause} ORDER BY s.id DESC`,
+    args: params
+  });
+  const songs = result.rows;
 
   return res.status(200).json({
     success: true,
     data: songs,
     message: 'Daftar lagu berhasil diambil'
   });
-});
+}));
 
 // GET /api/songs/random?mood_id= (publik) - didaftarkan SEBELUM /:id
-router.get('/random', (req, res) => {
+router.get('/random', asyncHandler(async (req, res) => {
   const { mood_id } = req.query;
   let song;
 
   if (mood_id !== undefined && mood_id !== '') {
-    song = db
-      .prepare(`${BASE_SONG_SELECT} WHERE s.mood_id = ? ORDER BY RANDOM() LIMIT 1`)
-      .get(Number(mood_id));
+    const result = await db.execute({
+      sql: `${BASE_SONG_SELECT} WHERE s.mood_id = ? ORDER BY RANDOM() LIMIT 1`,
+      args: [Number(mood_id)]
+    });
+    song = result.rows[0];
   } else {
-    song = db
-      .prepare(`${BASE_SONG_SELECT} ORDER BY RANDOM() LIMIT 1`)
-      .get();
+    const result = await db.execute(`${BASE_SONG_SELECT} ORDER BY RANDOM() LIMIT 1`);
+    song = result.rows[0];
   }
 
   if (!song) {
@@ -121,12 +142,12 @@ router.get('/random', (req, res) => {
     data: song,
     message: 'Rekomendasi lagu acak berhasil diambil'
   });
-});
+}));
 
 // GET /api/songs/:id (publik)
-router.get('/:id', (req, res) => {
+router.get('/:id', asyncHandler(async (req, res) => {
   const songId = Number(req.params.id);
-  const song = selectSongByIdStmt.get(songId);
+  const song = await selectSongById(songId);
 
   if (!song) {
     return res.status(404).json({
@@ -142,7 +163,7 @@ router.get('/:id', (req, res) => {
     data: song,
     message: 'Detail lagu berhasil diambil'
   });
-});
+}));
 
 // POST /api/songs (auth, multipart field "cover" opsional)
 router.post(
@@ -151,28 +172,29 @@ router.post(
   uploadSingle('cover'),
   songValidationRules,
   validate,
-  (req, res) => {
+  asyncHandler(async (req, res) => {
     const title = req.body.title.trim();
     const artist = req.body.artist.trim();
     const moodId = Number(req.body.mood_id);
     const link = req.body.link ? req.body.link.trim() : null;
     const coverPath = req.file?.filename || null;
 
-    const info = db
-      .prepare(`
+    const info = await db.execute({
+      sql: `
         INSERT INTO songs (title, artist, mood_id, link, cover_path, created_by)
         VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run(title, artist, moodId, link, coverPath, req.user?.id);
+      `,
+      args: [title, artist, moodId, link, coverPath, req.user?.id]
+    });
 
-    const createdSong = selectSongByIdStmt.get(Number(info.lastInsertRowid));
+    const createdSong = await selectSongById(Number(info.lastInsertRowid));
 
     return res.status(201).json({
       success: true,
       data: createdSong,
       message: 'Lagu berhasil ditambahkan'
     });
-  }
+  })
 );
 
 // PUT /api/songs/:id (auth, multipart field "cover" opsional)
@@ -180,9 +202,9 @@ router.put(
   '/:id',
   authMiddleware,
   uploadSingle('cover'),
-  (req, res, next) => {
+  asyncHandler(async (req, res, next) => {
     const songId = Number(req.params.id);
-    const existing = selectRawSongByIdStmt.get(songId);
+    const existing = await selectRawSongById(songId);
 
     if (!existing) {
       if (req.file?.filename) {
@@ -198,10 +220,10 @@ router.put(
 
     req.existingSong = existing;
     return next();
-  },
+  }),
   songValidationRules,
   validate,
-  (req, res) => {
+  asyncHandler(async (req, res) => {
     const existing = req.existingSong;
     const title = req.body.title.trim();
     const artist = req.body.artist.trim();
@@ -216,26 +238,29 @@ router.put(
       coverPath = req.file.filename;
     }
 
-    db.prepare(`
-      UPDATE songs
-      SET title = ?, artist = ?, mood_id = ?, link = ?, cover_path = ?
-      WHERE id = ?
-    `).run(title, artist, moodId, link, coverPath, existing.id);
+    await db.execute({
+      sql: `
+        UPDATE songs
+        SET title = ?, artist = ?, mood_id = ?, link = ?, cover_path = ?
+        WHERE id = ?
+      `,
+      args: [title, artist, moodId, link, coverPath, existing.id]
+    });
 
-    const updatedSong = selectSongByIdStmt.get(existing.id);
+    const updatedSong = await selectSongById(existing.id);
 
     return res.status(200).json({
       success: true,
       data: updatedSong,
       message: 'Lagu berhasil diperbarui'
     });
-  }
+  })
 );
 
 // DELETE /api/songs/:id (auth)
-router.delete('/:id', authMiddleware, (req, res) => {
+router.delete('/:id', authMiddleware, asyncHandler(async (req, res) => {
   const songId = Number(req.params.id);
-  const existing = selectRawSongByIdStmt.get(songId);
+  const existing = await selectRawSongById(songId);
 
   if (!existing) {
     return res.status(404).json({
@@ -246,7 +271,7 @@ router.delete('/:id', authMiddleware, (req, res) => {
     });
   }
 
-  db.prepare('DELETE FROM songs WHERE id = ?').run(songId);
+  await db.execute({ sql: 'DELETE FROM songs WHERE id = ?', args: [songId] });
 
   if (existing.cover_path) {
     removeUploadedFile(existing.cover_path);
@@ -257,6 +282,6 @@ router.delete('/:id', authMiddleware, (req, res) => {
     data: { id: songId },
     message: 'Lagu berhasil dihapus'
   });
-});
+}));
 
 module.exports = router;

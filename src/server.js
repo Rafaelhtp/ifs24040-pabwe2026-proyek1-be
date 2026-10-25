@@ -38,13 +38,16 @@ const db = require('./db');
 
 const PORT = Number(process.env.PORT) || 5000;
 
-try {
-  const moodCount = db.prepare('SELECT COUNT(*) as count FROM moods').get()?.count || 0;
-  const songCount = db.prepare('SELECT COUNT(*) as count FROM songs').get()?.count || 0;
+async function startServer() {
+  await db.ready;
+  const moodResult = await db.execute('SELECT COUNT(*) as count FROM moods');
+  const songResult = await db.execute('SELECT COUNT(*) as count FROM songs');
+  const moodCount = moodResult.rows[0]?.count || 0;
+  const songCount = songResult.rows[0]?.count || 0;
 
   const server = app.listen(PORT, () => {
     process.stdout.write(`Moodify API berjalan di http://localhost:${PORT}\n`);
-    process.stdout.write(`Lokasi database : ${db.dbPath}\n`);
+    process.stdout.write('Database        : Turso/libSQL\n');
     process.stdout.write(`Data tersedia   : ${moodCount} mood, ${songCount} lagu\n`);
   });
 
@@ -58,7 +61,9 @@ try {
     }
     process.exit(1);
   });
-} catch (err) {
+}
+
+startServer().catch((err) => {
   process.stderr.write(`[ERROR] Terjadi kegagalan saat inisialisasi server: ${err?.message}\n`);
   process.exit(1);
-}
+});

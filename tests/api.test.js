@@ -1,4 +1,5 @@
 // Pengujian komprehensif REST API Moodify menggunakan Vitest (mencakup seluruh cabang/branch & unit)
+import { describe, test, expect, beforeAll, afterAll } from 'vitest';
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -9,11 +10,9 @@ const multer = require('multer');
 const testUploadDir = path.join(os.tmpdir(), `moodify-test-uploads-${Date.now()}`);
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-moodify-ci-2026';
-process.env.DB_PATH = ':memory:';
+process.env.TURSO_DATABASE_URL = 'file::memory:';
+delete process.env.TURSO_AUTH_TOKEN;
 process.env.UPLOAD_DIR = testUploadDir;
-
-const { describe, test, expect, beforeAll, afterAll } =
-  typeof Bun !== 'undefined' ? require('bun:test') : globalThis;
 
 const srcDir = fs.existsSync(path.resolve(__dirname, '../../src/app.js'))
   ? '../../src'
@@ -45,6 +44,7 @@ describe('Moodify REST API Integration & Branch Coverage Tests', () => {
   let createdEntryId = null;
 
   beforeAll(async () => {
+    await db.ready;
     await new Promise((resolve) => {
       server = app.listen(0, '127.0.0.1', () => {
         const addr = server.address();
@@ -62,7 +62,7 @@ describe('Moodify REST API Integration & Branch Coverage Tests', () => {
       fs.rmSync(testUploadDir, { recursive: true, force: true });
     }
     if (db && typeof db.close === 'function') {
-      db.close();
+      await db.close();
     }
     // Pastikan sub-direktori bersih dari artefak lokal sebelum stage Package Application
     const rootDir = path.resolve(__dirname, '../..');
@@ -793,32 +793,20 @@ describe('Moodify REST API Integration & Branch Coverage Tests', () => {
     expect(jsonSent.debug).toBeUndefined();
     process.env.NODE_ENV = 'test';
 
-    // e. Uji inisialisasi db.js dengan file sementara, seed kedua kali (early return), dan rollback transaksi
-    const tempDbDir = path.join(os.tmpdir(), `moodify-db-test-${Date.now()}`, 'nested');
-    const tempDbFile = path.join(tempDbDir, 'test.db');
-    const fileDb = db.createDatabase(tempDbFile);
-    expect(fileDb.dbPath).toBe(tempDbFile);
-    expect(fileDb.query('SELECT COUNT(*) as c FROM moods').get().c).toBe(7);
-    fileDb.run('UPDATE moods SET emoji = ? WHERE id = ?', '😊', 1);
-    // Panggil seedDatabase lagi saat tabel moods sudah berisi data -> harus langsung return false
-    expect(seedDatabase(fileDb)).toBe(false);
+    // e. Seed idempotent dan transaksi rollback menggunakan client libSQL promise-based
+    expect(await seedDatabase(db)).toBe(false);
 
-    // Uji rollback transaksi ketika fungsi di dalam transaksi melempar error
-    const failingTx = fileDb.transaction(() => {
-      fileDb.prepare('INSERT INTO moods (name, emoji, color) VALUES (?, ?, ?)').run(
-        'Sementara',
-        '🧪',
-        '#000000'
-      );
-      throw new Error('Simulasi gagal transaksi');
+    const transaction = await db.transaction('write');
+    await transaction.execute({
+      sql: 'INSERT INTO moods (name, emoji, color) VALUES (?, ?, ?)',
+      args: ['Sementara', '🧪', '#000000']
     });
-    expect(() => failingTx()).toThrow('Simulasi gagal transaksi');
-    const rolledBackMood = fileDb
-      .prepare('SELECT * FROM moods WHERE name = ?')
-      .get('Sementara');
-    expect(rolledBackMood).toBeUndefined();
+    await transaction.rollback();
 
-    fileDb.close();
-    fs.rmSync(path.dirname(tempDbDir), { recursive: true, force: true });
+    const rolledBackMoodResult = await db.execute({
+      sql: 'SELECT * FROM moods WHERE name = ?',
+      args: ['Sementara']
+    });
+    expect(rolledBackMoodResult.rows).toHaveLength(0);
   });
 });
