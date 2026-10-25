@@ -713,21 +713,31 @@ describe('Moodify REST API Integration & Branch Coverage Tests', () => {
     const page404Res = await fetch(`${baseUrl}/halaman-spa-acak`);
     expect([200, 404]).toContain(page404Res.status);
 
-    // b. Uji CORS ketika CLIENT_URL dibatasi, domain Vercel (*.vercel.app), dan mode development
-    process.env.CLIENT_URL = 'https://moodify.example.com';
-    expect(app.isOriginAllowed('https://moodify.example.com')).toBe(true);
-    expect(app.isOriginAllowed('https://moodify-fe.vercel.app')).toBe(true);
-    expect(app.isOriginAllowed('https://attacker.example.com')).toBe(false);
+    // b. Uji CORS untuk origin frontend, preflight POST, dan origin yang tidak diizinkan
+    const preflightRes = await fetch(`${baseUrl}/api/auth/register`, {
+      method: 'OPTIONS',
+      headers: {
+        Origin: 'http://localhost:5173',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type,authorization'
+      }
+    });
+    expect(preflightRes.status).toBe(204);
+    expect(preflightRes.headers.get('access-control-allow-methods')).toContain('POST');
+    expect(preflightRes.headers.get('access-control-allow-headers')).toContain('Content-Type');
+    expect(preflightRes.headers.get('access-control-allow-origin')).toBe(
+      'http://localhost:5173'
+    );
+    expect(preflightRes.headers.get('access-control-allow-credentials')).toBe('true');
+
     const corsBlockedRes = await fetch(`${baseUrl}/api/health`, {
       headers: { Origin: 'https://attacker.example.com' }
     });
-    expect(corsBlockedRes.status).toBe(403);
-
-    delete process.env.CLIENT_URL;
-    process.env.NODE_ENV = 'development';
-    expect(app.isOriginAllowed('http://localhost:5173')).toBe(true);
+    expect(corsBlockedRes.status).toBe(200);
+    expect(corsBlockedRes.headers.get('access-control-allow-origin')).not.toBe(
+      'https://attacker.example.com'
+    );
     process.env.NODE_ENV = 'test';
-    process.env.CLIENT_URL = '*';
 
     // d. Uji unit middleware helper: getJwtSecret, getUploadDir, removeUploadedFile, formatUploadError, errorHandler
     const savedSecret = process.env.JWT_SECRET;

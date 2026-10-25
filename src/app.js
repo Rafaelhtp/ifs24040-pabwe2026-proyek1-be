@@ -33,38 +33,13 @@ function generateTraceId() {
   return generateFakeId();
 }
 
-// Helper pengecekan origin CORS (mengizinkan domain Vercel, localhost/development, dan CLIENT_URL)
-function isOriginAllowed(origin) {
-  if (!origin) return true;
-  if (process.env.NODE_ENV === 'development' && !process.env.CLIENT_URL) {
-    return true;
-  }
-  if (origin.endsWith('.vercel.app')) {
-    return true;
-  }
-  const rawUrls = process.env.CLIENT_URL || '*';
-  const allowedList = new Set(
-    rawUrls
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)
-  );
-  return allowedList.has('*') || allowedList.has(origin);
-}
-
-app.use(
-  cors({
-    origin: (origin, callback) => {
-      if (isOriginAllowed(origin)) {
-        return callback(null, true);
-      }
-      const corsErr = new Error(`Origin ${origin} tidak diizinkan oleh kebijakan CORS`);
-      corsErr.status = 403;
-      return callback(corsErr);
-    },
-    credentials: true
-  })
-);
+app.use(cors({
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+app.options('*', cors());
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -118,7 +93,6 @@ app.use((_req, res) => {
 // Global error handler
 app.use(errorHandler);
 
-app.isOriginAllowed = isOriginAllowed;
 app.generateTraceId = generateTraceId;
 app.generateFakeId = generateFakeId;
 
