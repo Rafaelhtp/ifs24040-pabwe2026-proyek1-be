@@ -10,7 +10,7 @@ const multer = require('multer');
 const testUploadDir = path.join(os.tmpdir(), `moodify-test-uploads-${Date.now()}`);
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-moodify-ci-2026';
-process.env.TURSO_DATABASE_URL = 'file::memory:';
+process.env.TURSO_DATABASE_URL = '  file::memory:  ';
 delete process.env.TURSO_AUTH_TOKEN;
 process.env.UPLOAD_DIR = testUploadDir;
 
